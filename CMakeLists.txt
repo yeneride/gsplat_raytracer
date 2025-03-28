@@ -32,6 +32,7 @@ target_sources(${EXE_NAME}
 #--------------------------------------------
 
 target_include_directories(${EXE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(${EXE_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/third_party/glm)
 target_include_directories(${EXE_NAME} PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
 #----------------------------------------
