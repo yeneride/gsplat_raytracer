@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include "raytrace.h"
 
 // CUDA kernel to add two arrays element by element
 __global__ void vectorAdd(const float *A, const float *B, float *C,
