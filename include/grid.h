@@ -28,7 +28,19 @@ template <int MAX_POINTS = 64> struct AccelerationGrid {
 
   ~AccelerationGrid() { cudaFree(d_grid); }
 
-  __device__ static bool intersectsEllipsoid(float3 center, float3 radii,
+  float3 getGridMin() {
+    return {0.0F, 0.0F, 0.0F};
+  }
+
+  float3 getCellSize() {
+    return cellSize;
+  }
+
+  int getCellsPerAxis() {
+    return cellsPerAxis;
+  }
+
+  __host__ __device__ static bool intersectsEllipsoid(float3 center, float3 radii,
                                       float3 cubeMin, float3 cubeMax) {
     float3 closestPoint =
         make_float3(fmaxf(cubeMin.x, fminf(center.x, cubeMax.x)),
@@ -68,7 +80,7 @@ template <int MAX_POINTS = 64> struct AccelerationGrid {
                               cubeMax)) {
         for (int j = 0; j < MAX_POINTS; j++) {
           if (localCell.pointCount < MAX_POINTS) {
-            localCell.points[localCell.pointCount++] = i;
+            localCell.point_idx[localCell.pointCount++] = i;
           }
         }
       }

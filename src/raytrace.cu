@@ -1,33 +1,25 @@
 #include "auxiliary.h"
 #include "grid.h"
 #include "raytrace.h"
+#include "float3_utils.h"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <functional>
 
-__host__ __device__ static inline float dot(float3 x, float3 y) {
-    return x.x * y.x + x.y * y.y + x.z * y.z;
-}
-
-__host__ __device__ static inline float3 operator*(float3 x, float3 y) {
-    return {x.x * y.x, x.y * y.y, x.z * y.z};
-}
-
-__device__ glm::vec3
-Raytracer::computeColorFromSH(int idx, int deg, int max_coeffs,
-                              const float3 *means, glm::vec3 campos,
+__device__ float3
+computeColorFromSH(int idx, int deg, int max_coeffs,
+                              const float3 *means, float3 campos,
                               const float *shs, bool *clamped) {
   // The implementation is loosely based on code for
   // "Differentiable Point-Based Radiance Fields for
   // Efficient View Synthesis" by Zhang et al. (2022)
   float3 pos_float3 = means[idx];
-  glm::vec3 pos = glm::vec3(pos_float3.x, pos_float3.y, pos_float3.z);
-  glm::vec3 dir = pos - campos;
-  dir = dir / glm::length(dir);
+  float3 pos = make_float3(pos_float3.x, pos_float3.y, pos_float3.z);
+  float3 dir = normalize(pos - campos);
 
-  glm::vec3 *sh = ((glm::vec3 *)shs) + idx * max_coeffs;
-  glm::vec3 result = SH_C0 * sh[0];
+  float3 *sh = ((float3 *)shs) + idx * max_coeffs;
+  float3 result = SH_C0 * sh[0];
 
   if (deg > 0) {
     float x = dir.x;
@@ -53,18 +45,18 @@ Raytracer::computeColorFromSH(int idx, int deg, int max_coeffs,
       }
     }
   }
-  result += 0.5f;
+  result = result + make_float3(0.5f, 0.5f, 0.5f);
 
   // RGB colors are clamped to positive values. If values are
   // clamped, we need to keep track of this for the backward pass.
   clamped[3 * idx + 0] = (result.x < 0);
   clamped[3 * idx + 1] = (result.y < 0);
   clamped[3 * idx + 2] = (result.z < 0);
-  return glm::max(result, 0.0f);
+  return max(result, make_float3(0.0f, 0.0f, 0.0f));
 }
 
 __device__ bool
-Raytracer::rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
+rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
                                   float3 center, float3 radii, float &tNear) {
   float3 oc = {
       rayOrigin.x - center.x,
@@ -103,7 +95,7 @@ Raytracer::rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
   return true;
 }
 
-__global__ void Raytracer::traceRays(
+__global__ void traceRays(
     GridCell<64> *grid, float3 *ellipsoidCenters, float3 *ellipsoidRadii,
     float3 cam_pos, float3 gridMin, float3 cellSize, int cellsPerAxis,
     int numEllipsoids, float tan_fovx, float tan_fovy, int width, int height,
@@ -127,11 +119,11 @@ __global__ void Raytracer::traceRays(
        cam_pos) /
       rayDir;
 
-  float3 tEnter = fminf(tMin, tMax);
-  float3 tExit = fmaxf(tMin, tMax);
+  float3 tEnter = min(tMin, tMax);
+  float3 tExit = max(tMin, tMax);
 
-  float tStart = fmaxf(0.0f, fmaxf(tEnter.x, fmaxf(tEnter.y, tEnter.z)));
-  float tEnd = fminf(tExit.x, fminf(tExit.y, tExit.z));
+  float tStart = max(0.0f, max(tEnter.x, max(tEnter.y, tEnter.z)));
+  float tEnd = min(tExit.x, min(tExit.y, tExit.z));
 
   if (tStart >= tEnd)
     return;
@@ -199,9 +191,9 @@ __global__ void Raytracer::traceRays(
   int pixelIdx = (y * width + x) * 3;
   if (hitEllipsoidIdx >= 0) {
     bool clamped[3];
-    glm::vec3 campos_glm = glm::vec3(cam_pos.x, cam_pos.y, cam_pos.z);
+    float3 campos_glm = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
 
-    glm::vec3 color =
+    float3 color =
         computeColorFromSH(hitEllipsoidIdx, sh_deg, max_coeffs,
                            ellipsoidCenters, campos_glm, shs, clamped);
 
