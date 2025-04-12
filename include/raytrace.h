@@ -31,29 +31,12 @@ public:
               std::function<char *(size_t)> binningBuffer,
               std::function<char *(size_t)> imageBuffer, const int P, int D,
               int M, const float *background, const int width, int height,
-              const float *means3D, const float *shs, const float *scales,
-              const float scale_modifier, const float *rotations,
+              const float3 *means3D, const float *shs, const float3 *scales,
+              const float scale_modifier, const float4 *rotations,
               const float *cov3D_precomp, const float *viewmatrix,
               const float *projmatrix, const float *cam_pos,
               const float tan_fovx, float tan_fovy, const bool prefiltered,
               float *out_color, int *radii, bool debug);
 };
-
-__device__ float3
-computeColorFromSH(int idx, int deg, int max_coeffs, const float3 *means,
-                   float3 campos, const float *shs, bool *clamped);
-
-__device__ bool rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
-                                              float3 center, float3 radii,
-                                              float &tNear);
-
-
-__global__ void traceRays(GridCell<64> *grid, float3 *ellipsoidCenters,
-                                 float3 *ellipsoidRadii, float3 cam_pos,
-                                 float3 gridMin, float3 cellSize,
-                                 int cellsPerAxis, int numEllipsoids,
-                                 float tan_fovx, float tan_fovy, int width,
-                                 int height, const float *shs, int sh_deg,
-                                 int max_coeffs, float *out_color);
 
 #endif

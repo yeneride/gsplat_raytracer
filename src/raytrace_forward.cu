@@ -1,16 +1,15 @@
 #include "auxiliary.h"
+#include "float3_utils.h"
 #include "grid.h"
 #include "raytrace.h"
-#include "float3_utils.h"
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <functional>
 
-__device__ float3
-computeColorFromSH(int idx, int deg, int max_coeffs,
-                              const float3 *means, float3 campos,
-                              const float *shs, bool *clamped) {
+__device__ float3 computeColorFromSH(int idx, int deg, int max_coeffs,
+                                     const float3 *means, float3 campos,
+                                     const float *shs, bool *clamped) {
   // The implementation is loosely based on code for
   // "Differentiable Point-Based Radiance Fields for
   // Efficient View Synthesis" by Zhang et al. (2022)
@@ -55,9 +54,9 @@ computeColorFromSH(int idx, int deg, int max_coeffs,
   return max(result, make_float3(0.0f, 0.0f, 0.0f));
 }
 
-__device__ bool
-rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
-                                  float3 center, float3 radii, float &tNear) {
+__device__ bool rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
+                                       float3 center, float3 radii,
+                                       float &tNear) {
   float3 oc = {
       rayOrigin.x - center.x,
       rayOrigin.y - center.y,
@@ -95,11 +94,51 @@ rayIntersectsEllipsoid(float3 rayOrigin, float3 rayDir,
   return true;
 }
 
-__global__ void traceRays(
-    GridCell<64> *grid, float3 *ellipsoidCenters, float3 *ellipsoidRadii,
-    float3 cam_pos, float3 gridMin, float3 cellSize, int cellsPerAxis,
-    int numEllipsoids, float tan_fovx, float tan_fovy, int width, int height,
-    const float *shs, int sh_deg, int max_coeffs, float *out_color) {
+__device__ float3 applyRotation(float3 direction, float4 rotation) {
+  // Extract quaternion components
+  float qx = rotation.x;
+  float qy = rotation.y;
+  float qz = rotation.z;
+  float qw = rotation.w;
+
+  // Apply quaternion rotation using the formula:
+  // v' = q * v * q^-1 (where v is represented as a quaternion with w=0)
+
+  // This can be optimized to the following:
+  float3 rotated;
+  float qw2 = qw * qw;
+  float qx2 = qx * qx;
+  float qy2 = qy * qy;
+  float qz2 = qz * qz;
+
+  // Calculate rotation matrix terms
+  float m00 = qw2 + qx2 - qy2 - qz2;
+  float m01 = 2.0f * (qx * qy - qw * qz);
+  float m02 = 2.0f * (qx * qz + qw * qy);
+
+  float m10 = 2.0f * (qx * qy + qw * qz);
+  float m11 = qw2 - qx2 + qy2 - qz2;
+  float m12 = 2.0f * (qy * qz - qw * qx);
+
+  float m20 = 2.0f * (qx * qz - qw * qy);
+  float m21 = 2.0f * (qy * qz + qw * qx);
+  float m22 = qw2 - qx2 - qy2 + qz2;
+
+  // Apply the rotation matrix
+  rotated.x = m00 * direction.x + m01 * direction.y + m02 * direction.z;
+  rotated.y = m10 * direction.x + m11 * direction.y + m12 * direction.z;
+  rotated.z = m20 * direction.x + m21 * direction.y + m22 * direction.z;
+
+  return rotated;
+}
+
+__global__ void traceRays(GridCell<64> *grid, float3 const *ellipsoidCenters,
+                          float3 const *ellipsoidRadii, float4 const *rotations,
+                          float scale_modifier, float3 cam_pos, float3 gridMin,
+                          float3 cellSize, int cellsPerAxis, int numEllipsoids,
+                          float tan_fovx, float tan_fovy, int width, int height,
+                          const float *shs, int sh_deg, int max_coeffs,
+                          float *out_color) {
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -163,7 +202,7 @@ __global__ void traceRays(
         continue;
 
       float3 center = ellipsoidCenters[ellipsoidIdx];
-      float3 radii = ellipsoidRadii[ellipsoidIdx];
+      float3 radii = ellipsoidRadii[ellipsoidIdx] * scale_modifier;
 
       float tNear;
       if (rayIntersectsEllipsoid(cam_pos, rayDir, center, radii, tNear) &&
@@ -193,9 +232,17 @@ __global__ void traceRays(
     bool clamped[3];
     float3 campos_glm = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
 
+    float4 rotation = rotations[hitEllipsoidIdx];
+    float4 inverseRotation = make_float4(-rotation.x, -rotation.y, -rotation.z, rotation.w);
+    float3 rotated_dir = applyRotation(rayDir, inverseRotation);
+
+    // Temporarily modify campos to create an unrotated view direction for computeColorFromSH
+    // We'll construct a fake camera position that would result in our rotated direction
+    float3 modified_campos = ellipsoidCenters[hitEllipsoidIdx] - rotated_dir;
+
     float3 color =
         computeColorFromSH(hitEllipsoidIdx, sh_deg, max_coeffs,
-                           ellipsoidCenters, campos_glm, shs, clamped);
+                           ellipsoidCenters, modified_campos, shs, clamped);
 
     out_color[pixelIdx] = color.x;
     out_color[pixelIdx + 1] = color.y;
@@ -211,41 +258,14 @@ int Raytracer::forward(std::function<char *(size_t)> geometryBuffer,
                        std::function<char *(size_t)> binningBuffer,
                        std::function<char *(size_t)> imageBuffer, const int P,
                        int D, int M, const float *background, const int width,
-                       int height, const float *means3D, const float *shs,
-                       const float *scales, const float scale_modifier,
-                       const float *rotations, const float *cov3D_precomp,
+                       int height, const float3 *means3D, const float *shs,
+                       const float3 *scales, const float scale_modifier,
+                       const float4 *rotations, const float *cov3D_precomp,
                        const float *viewmatrix, const float *projmatrix,
                        const float *cam_pos, const float tan_fovx,
                        float tan_fovy, const bool prefiltered, float *out_color,
                        int *radii, bool debug) {
-  float3 *d_means3D;
-  cudaMalloc(&d_means3D, P * sizeof(float3));
-  cudaMemcpy(d_means3D, means3D, P * sizeof(float3), cudaMemcpyHostToDevice);
-
-  float3 *d_radii;
-  cudaMalloc(&d_radii, P * sizeof(float3));
-  float3 *h_radii = new float3[P];
-  for (int i = 0; i < P; i++) {
-    h_radii[i] = make_float3(scales[i * 3] * scale_modifier,
-                             scales[i * 3 + 1] * scale_modifier,
-                             scales[i * 3 + 2] * scale_modifier);
-  }
-  cudaMemcpy(d_radii, h_radii, P * sizeof(float3), cudaMemcpyHostToDevice);
-  delete[] h_radii;
-
-  float3 h_cam_pos = make_float3(cam_pos[0], cam_pos[1], cam_pos[2]);
-  float3 *d_cam_pos;
-  cudaMalloc(&d_cam_pos, sizeof(float3));
-  cudaMemcpy(d_cam_pos, &h_cam_pos, sizeof(float3), cudaMemcpyHostToDevice);
-
-  float *d_out_color;
-  cudaMalloc(&d_out_color, width * height * 3 * sizeof(float));
-
-  float *d_shs;
-  cudaMalloc(&d_shs, P * M * 3 * sizeof(float));
-  cudaMemcpy(d_shs, shs, P * M * 3 * sizeof(float), cudaMemcpyHostToDevice);
-
-  accelGrid->build(means3D, P);
+  accelGrid->build(means3D, scales, P);
 
   GridCell<64> *d_grid = accelGrid->getDeviceGrid();
   float3 gridMin = accelGrid->getGridMin();
@@ -255,19 +275,12 @@ int Raytracer::forward(std::function<char *(size_t)> geometryBuffer,
   dim3 blockSize(16, 16);
   dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                 (height + blockSize.y - 1) / blockSize.y);
+  float3 camPos = {cam_pos[0], cam_pos[1], cam_pos[2]};
 
-  traceRays<<<gridSize, blockSize>>>(
-      d_grid, d_means3D, d_radii, *d_cam_pos, gridMin, cellSize, cellsPerAxis,
-      P, tan_fovx, tan_fovy, width, height, d_shs, D, M, d_out_color);
-
-  cudaMemcpy(out_color, d_out_color, width * height * 3 * sizeof(float),
-             cudaMemcpyDeviceToHost);
-
-  cudaFree(d_means3D);
-  cudaFree(d_radii);
-  cudaFree(d_cam_pos);
-  cudaFree(d_out_color);
-  cudaFree(d_shs);
+  traceRays<<<gridSize, blockSize>>>(d_grid, means3D, scales, rotations,
+                                     scale_modifier, camPos, gridMin, cellSize,
+                                     cellsPerAxis, P, tan_fovx, tan_fovy, width,
+                                     height, shs, D, M, out_color);
 
   return 0;
 }

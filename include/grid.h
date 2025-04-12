@@ -55,8 +55,8 @@ template <int MAX_POINTS = 64> struct AccelerationGrid {
   }
 
   __global__ static void constructGrid(GridCell<MAX_POINTS> *grid,
-                                       float3 *ellipsoidCenters,
-                                       float3 *ellipsoidRadii,
+                                       float3 const *ellipsoidCenters,
+                                       float3 const *ellipsoidRadii,
                                        int numEllipsoids, float3 gridSize,
                                        float3 cellSize, int cellsPerAxis) {
     int x = blockIdx.x;
@@ -94,15 +94,15 @@ template <int MAX_POINTS = 64> struct AccelerationGrid {
     cudaMemset(d_grid, 0, totalCells * sizeof(GridCell<MAX_POINTS>));
   }
 
-  void build(float3 *ellipsoidCenters, float3 *ellipsoidRadii,
+  void build(float3 const *ellipsoidCenters, float3 const *ellipsoidRadii,
              int numEllipsoids) {
     float3 *d_ellipsoidCenters, *d_ellipsoidRadii;
-    dim3 gridSize(cellsPerAxis, cellsPerAxis, cellsPerAxis);
+    dim3 d_gridSize(cellsPerAxis, cellsPerAxis, cellsPerAxis);
 
     clear();
-    constructGrid<<<gridSize, 1>>>(
+    constructGrid<<<d_gridSize, 1>>>(
         d_grid, ellipsoidCenters, ellipsoidRadii, numEllipsoids,
-        gridSize, cellSize);
+        gridSize, cellSize, cellsPerAxis);
 
     cudaDeviceSynchronize();
   }
