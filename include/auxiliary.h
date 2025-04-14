@@ -12,7 +12,6 @@
 #ifndef CUDA_RASTERIZER_AUXILIARY_H_INCLUDED
 #define CUDA_RASTERIZER_AUXILIARY_H_INCLUDED
 
-
 // Spherical harmonics coefficients
 __device__ const float SH_C0 = 0.28209479177387814f;
 __device__ const float SH_C1 = 0.4886025119029199f;
