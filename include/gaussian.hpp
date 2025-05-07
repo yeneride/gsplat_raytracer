@@ -25,9 +25,9 @@ private:
     Ray local_ray = to_local(r);
     glm::vec3 o = local_ray.get_origin();
     glm::vec3 d = local_ray.get_direction();
-    float o_dot_o = glm::dot(o, o);
-    float o_dot_d = glm::dot(o, d);
-    return o_dot_o - o_dot_d * o_dot_d;
+
+    glm::vec3 shortcut = o - d * glm::dot(o, d);
+    return glm::dot(shortcut, shortcut);
   }
 
 public:
@@ -37,10 +37,9 @@ public:
                                float o)
       : mean(m), cov(c), radiance(r), opacity(o) {}
   __host__ __device__ float cumulative_density(Ray r) const {
-    float d = normalized_distance_squared(r);
+    float y_s = normalized_distance_squared(r);
     float coeff = 1.0f / sqrtf(2.0f * 3.14159265358979323846f);
-    float exponent = -d / 2.0f;
-    return d > 0.0f ? 1.0f : 0.0f;
+    float exponent = -y_s / 2.0f;
     return coeff * std::exp(exponent) * opacity;
   }
   __host__ __device__ glm::vec3 radiance_from(Ray ray) const {

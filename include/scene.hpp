@@ -19,14 +19,12 @@ public:
       const float distance = g.avg_depth(ray);
       if (distance < 0)
         continue;
-      float density = g.cumulative_density(ray);
+      auto density = g.cumulative_density(ray);
       if (density < 0.01f)
         continue;
       glm::vec3 radiance = g.radiance_from(ray);
-      // color += radiance * acc_transparency * density;
-      color += glm::vec3(density);
-      break;
-      acc_transparency *= (1 - density);
+      color += radiance * acc_transparency * density;
+      acc_transparency *= (1.0f - density);
       if (acc_transparency < 0.01f) {
         break;
       }

@@ -24,7 +24,7 @@ std::vector<Gaussian> SplatLoader::load_from_ply(const std::string &filename) {
 
   std::vector<Gaussian> gaussians;
   for (int i = 0; i < x.size(); ++i) {
-    glm::vec3 mean = glm::vec3(x[i], y[i], z[i] + 960);
+    glm::vec3 mean = glm::vec3(x[i], y[i] + 6.0f, z[i] + 24.0f);
     glm::vec3 scale = glm::vec3(exp(sx[i]), exp(sy[i]), exp(sz[i]));
     glm::vec4 rotation = glm::normalize(glm::vec4(qx[i], qy[i], qz[i], qw[i]));
     float opacity = 1.0 / (1.0 + std::exp(-opacities[i]));
