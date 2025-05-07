@@ -14,14 +14,9 @@ public:
     glm::vec3 color = glm::vec3(0.0f, 0.0f, 0.0f);
     float acc_transparency = 1.0f;
     const auto &candidates = gaussians.top_candidates_for(ray);
-    for (int i = 0; i < candidates.count; ++i) {
-      const Gaussian &g = candidates.gaussians[i];
-      const float distance = g.avg_depth(ray);
-      if (distance < 0)
-        continue;
-      auto density = g.cumulative_density(ray);
-      if (density < 0.01f)
-        continue;
+    for (const Gaussian* gptr : candidates) {
+      const Gaussian& g = *gptr;
+      float density = g.cumulative_density(ray);
       glm::vec3 radiance = g.radiance_from(ray);
       color += radiance * acc_transparency * density;
       acc_transparency *= (1.0f - density);
