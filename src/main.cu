@@ -1,130 +1,66 @@
-#include "raytrace.h"
-#include <cuda_runtime.h>
-#include <stdio.h>
+#include "acceleration_structure.hpp"
+#include "camera.hpp"
+#include "covariance.hpp"
+#include "gaussian.hpp"
+#include "happly.hpp"
+#include "image_io.hpp"
+#include "ray.hpp"
+#include "scene.hpp"
+#include "spherical_harmonics.hpp"
+#include "splat_loader.hpp"
+#include <iostream>
+#include <thrust/device_vector.h>
+#include <thrust/execution_policy.h>
+#include <thrust/for_each.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <vector>
 
-// CUDA kernel to add two arrays element by element
-__global__ void vectorAdd(const float *A, const float *B, float *C,
-                          int numElements) {
-  int i = blockDim.x * blockIdx.x + threadIdx.x;
-  if (i < numElements) {
-    C[i] = A[i] + B[i];
+struct RenderFunctor {
+  Scene scene;
+  Camera camera;
+  float *image;
+  int resolution;
+  __device__ void operator()(int i) {
+    int x = i % resolution;
+    int y = i / resolution;
+    float u = (float)x / resolution;
+    float v = (float)y / resolution;
+    Ray ray = camera.ray_at(u, v);
+    glm::vec3 color = scene.render(ray);
+    image[3 * i + 0] = color.x;
+    image[3 * i + 1] = color.y;
+    image[3 * i + 2] = color.z;
   }
-}
+};
 
-// Main program
-int main(void) {
-  // Print CUDA device information
-  int deviceCount = 0;
-  float milliseconds = 0;
-  cudaError_t error = cudaGetDeviceCount(&deviceCount);
+int main() {
+  std::cout << "Loading..." << std::endl;
+  std::vector<Gaussian> gaussians_cpu = SplatLoader::load_from_ply("splat.ply");
+  std::cout << "Loaded" << std::endl;
 
-  if (error != cudaSuccess) {
-    printf("Error: Failed to get CUDA device count: %s\n",
-           cudaGetErrorString(error));
-    return EXIT_FAILURE;
-  }
+  size_t resolution = 1024;
+  std::vector<float> image_cpu(resolution * resolution * 3);
+  thrust::device_vector<float> image_gpu(resolution * resolution * 3);
+  Camera camera(glm::mat4(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1), 1.0f,
+                1.0f);
 
-  if (deviceCount == 0) {
-    printf("Warning: No CUDA devices found\n");
-    return EXIT_SUCCESS;
-  }
+  std::cout << "Sorting..." << std::endl;
+  thrust::device_vector<Gaussian> gaussians_gpu = gaussians_cpu;
+  Scene scene(SortedGaussiansAccelerationStructure(gaussians_gpu,
+                                                   camera.ray_at(0.5, 0.5)));
+  std::cout << "Sorted" << std::endl;
 
-  printf("Detected %d CUDA device(s)\n", deviceCount);
+  RenderFunctor functor{scene, camera,
+                        thrust::raw_pointer_cast(image_gpu.data()),
+                        (int)resolution};
+  std::cout << "Rendering..." << std::endl;
+  thrust::for_each(thrust::device, thrust::counting_iterator(0),
+                   thrust::counting_iterator((int)(resolution * resolution)),
+                   functor);
+  std::cout << "Rendered" << std::endl;
 
-  // Use first device
-  cudaSetDevice(0);
-
-  cudaDeviceProp deviceProp;
-  cudaGetDeviceProperties(&deviceProp, 0);
-  printf("Using device 0: %s\n", deviceProp.name);
-
-  // Set vector size
-  int numElements = 50000;
-  size_t size = numElements * sizeof(float);
-  printf("Vector size: %d\n", numElements);
-
-  // Allocate host memory
-  float *h_A = (float *)malloc(size);
-  float *h_B = (float *)malloc(size);
-  float *h_C = (float *)malloc(size);
-
-  // Initialize host arrays
-  for (int i = 0; i < numElements; ++i) {
-    h_A[i] = rand() / (float)RAND_MAX;
-    h_B[i] = rand() / (float)RAND_MAX;
-  }
-
-  // Allocate device memory
-  float *d_A = NULL;
-  float *d_B = NULL;
-  float *d_C = NULL;
-
-  cudaMalloc((void **)&d_A, size);
-  cudaMalloc((void **)&d_B, size);
-  cudaMalloc((void **)&d_C, size);
-
-  // Copy data from host to device
-  cudaMemcpy(d_A, h_A, size, cudaMemcpyHostToDevice);
-  cudaMemcpy(d_B, h_B, size, cudaMemcpyHostToDevice);
-
-  // Launch CUDA kernel
-  int threadsPerBlock = 256;
-  int blocksPerGrid = (numElements + threadsPerBlock - 1) / threadsPerBlock;
-  printf("CUDA kernel launch with %d blocks of %d threads\n", blocksPerGrid,
-         threadsPerBlock);
-
-  vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, numElements);
-
-  error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    printf("Error: Failed to launch CUDA kernel: %s\n",
-           cudaGetErrorString(error));
-    goto cleanup;
-  }
-
-  // Copy result back to host
-  cudaMemcpy(h_C, d_C, size, cudaMemcpyDeviceToHost);
-
-  // Verify result (just checking a few elements)
-  for (int i = 0; i < 5; ++i) {
-    printf("%.2f + %.2f = %.2f\n", h_A[i], h_B[i], h_C[i]);
-  }
-
-  // Measure performance
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-
-  // Warm up
-  vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, numElements);
-
-  // Timing run
-  cudaEventRecord(start);
-  for (int i = 0; i < 100; i++) {
-    vectorAdd<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, numElements);
-  }
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-
-  milliseconds = 0;
-  cudaEventElapsedTime(&milliseconds, start, stop);
-  printf("Performance: %f ms per kernel launch (average of 100 launches)\n",
-         milliseconds / 100);
-
-cleanup:
-  // Free device memory
-  cudaFree(d_A);
-  cudaFree(d_B);
-  cudaFree(d_C);
-
-  // Free host memory
-  free(h_A);
-  free(h_B);
-  free(h_C);
-
-  // Reset device
-  cudaDeviceReset();
-
-  printf("CUDA demo completed successfully\n");
+  thrust::copy(image_gpu.begin(), image_gpu.end(), image_cpu.begin());
+  std::cout << "Copied" << std::endl;
+  write_ppm("output.ppm", image_cpu.data(), resolution, resolution);
   return 0;
 }
